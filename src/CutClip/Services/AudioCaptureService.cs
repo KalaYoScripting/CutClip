@@ -2,6 +2,7 @@ namespace CutClip.Services;
 
 /// <summary>
 /// Builds FFmpeg audio input arguments using WASAPI when available, otherwise DirectShow.
+/// System audio falls back to native WASAPI loopback when FFmpeg lacks WASAPI (Stereo Mix is unreliable).
 /// </summary>
 public static class AudioCaptureService
 {
@@ -13,10 +14,12 @@ public static class AudioCaptureService
         bool microphone,
         out string inputArgs,
         out string mapArgs,
+        out bool useNativeSystemLoopback,
         out string? error)
     {
         inputArgs = string.Empty;
         mapArgs = string.Empty;
+        useNativeSystemLoopback = false;
         error = null;
 
         if (!systemAudio && !microphone)
@@ -27,6 +30,28 @@ public static class AudioCaptureService
         if (FFmpegProbe.IsWasapiSupported())
         {
             BuildWasapi(systemAudio, microphone, out inputArgs, out mapArgs);
+            return true;
+        }
+
+        if (systemAudio)
+        {
+            useNativeSystemLoopback = true;
+
+            if (microphone)
+            {
+                var micResult = TryBuildDshow(systemAudio: false, microphone: true, out inputArgs, out mapArgs, out error);
+                if (!micResult)
+                {
+                    return false;
+                }
+
+                mapArgs = "-filter_complex \"[1:a][2:a]amix=inputs=2:duration=longest[aout]\" -map 0:v -map \"[aout]\" -c:a aac -b:a 192k -shortest ";
+            }
+            else
+            {
+                mapArgs = "-map 0:v -map 1:a -c:a aac -b:a 192k -shortest ";
+            }
+
             return true;
         }
 

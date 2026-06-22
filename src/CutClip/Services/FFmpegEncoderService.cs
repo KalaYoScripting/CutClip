@@ -18,8 +18,10 @@ public sealed class FFmpegEncoderService : IDisposable
     private bool _recordSystemAudio;
     private bool _recordMicrophone;
     private string _audioInput = string.Empty;
+    private string _nativeAudioInput = string.Empty;
     private string _audioMap = string.Empty;
     private bool _disposed;
+    private NativeSystemAudioCapture? _nativeSystemAudio;
 
     public string TempOutputPath => _tempOutputPath ?? throw new InvalidOperationException("Encoder not started.");
 
@@ -31,9 +33,17 @@ public sealed class FFmpegEncoderService : IDisposable
         _recordSystemAudio = recordSystemAudio;
         _recordMicrophone = recordMicrophone;
 
-        if (!AudioCaptureService.TryBuild(recordSystemAudio, recordMicrophone, out _audioInput, out _audioMap, out var audioError))
+        if (!AudioCaptureService.TryBuild(recordSystemAudio, recordMicrophone, out _audioInput, out _audioMap, out var useNativeSystemLoopback, out var audioError))
         {
             throw new InvalidOperationException(audioError ?? "Failed to configure audio capture.");
+        }
+
+        if (useNativeSystemLoopback)
+        {
+            _nativeSystemAudio = new NativeSystemAudioCapture();
+            _nativeSystemAudio.Prepare();
+            _nativeAudioInput = _nativeSystemAudio.BuildFfmpegInputArgs();
+            _nativeSystemAudio.BeginCaptureAfterFfmpegStarted();
         }
 
         _tempOutputPath = OutputPathService.GenerateTempPath(format);
@@ -93,12 +103,12 @@ public sealed class FFmpegEncoderService : IDisposable
 
     private string BuildMp4Args()
     {
-        return $"-y -thread_queue_size 1024 {BuildVideoInputArgs()}{_audioInput}{BuildVideoOutputArgs()}{_audioMap}-movflags +faststart \"{_tempOutputPath}\"";
+        return $"-y -thread_queue_size 1024 {BuildVideoInputArgs()}{_nativeAudioInput}{_audioInput}{BuildVideoOutputArgs()}{_audioMap}-movflags +faststart \"{_tempOutputPath}\"";
     }
 
     private string BuildWebmArgs()
     {
-        return $"-y -thread_queue_size 1024 {BuildVideoInputArgs()}{_audioInput}-c:v libvpx-vp9 -pix_fmt yuv420p -r {_fps} {_audioMap}\"{_tempOutputPath}\"";
+        return $"-y -thread_queue_size 1024 {BuildVideoInputArgs()}{_nativeAudioInput}{_audioInput}-c:v libvpx-vp9 -pix_fmt yuv420p -r {_fps} {_audioMap}\"{_tempOutputPath}\"";
     }
 
     private string BuildGifArgs()
@@ -134,6 +144,9 @@ public sealed class FFmpegEncoderService : IDisposable
                 // FFmpeg may have already exited.
             }
 
+            _nativeSystemAudio?.Dispose();
+            _nativeSystemAudio = null;
+
             await _ffmpegProcess.WaitForExitAsync().ConfigureAwait(false);
 
             if (_stdoutDrainTask is not null)
@@ -167,6 +180,8 @@ public sealed class FFmpegEncoderService : IDisposable
         }
         finally
         {
+            _nativeSystemAudio?.Dispose();
+            _nativeSystemAudio = null;
             _ffmpegProcess.Dispose();
             _ffmpegProcess = null;
             _stdin = null;
@@ -228,6 +243,8 @@ public sealed class FFmpegEncoderService : IDisposable
         }
 
         _ffmpegProcess?.Dispose();
+        _nativeSystemAudio?.Dispose();
+        _nativeSystemAudio = null;
 
         if (_tempOutputPath is not null)
         {

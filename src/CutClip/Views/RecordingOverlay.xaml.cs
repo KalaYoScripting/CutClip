@@ -10,7 +10,7 @@ namespace CutClip.Views;
 
 public partial class RecordingOverlay : Window
 {
-    private const double BorderGapPhysical = 16;
+    private const double BorderGapPhysical = 10;
     private const double BorderStroke = 3;
 
     private readonly DispatcherTimer _timer;

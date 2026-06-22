@@ -93,6 +93,7 @@ public sealed class RecordingService : IDisposable
                 _state.RecordMicrophone,
                 out _,
                 out _,
+                out _,
                 out var audioError))
         {
             _state.IsRecording = false;
