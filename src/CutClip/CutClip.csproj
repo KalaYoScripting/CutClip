@@ -34,11 +34,7 @@
 
   <ItemGroup>
     <Resource Include="Assets\app-icon.ico" />
-    <Resource Include="Assets\app-icon.png" />
     <None Update="Assets\app-icon.ico">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="Assets\app-icon.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -11,7 +10,8 @@ namespace CutClip.Views;
 
 public partial class RecordingOverlay : Window
 {
-    private const double BorderPaddingDip = 10;
+    private const double BorderGapPhysical = 16;
+    private const double BorderStroke = 3;
 
     private readonly DispatcherTimer _timer;
     private Window? _borderWindow;
@@ -76,11 +76,16 @@ public partial class RecordingOverlay : Window
     {
         CloseBorderWindow();
 
-        const double stroke = 3;
         var dipLeft = _physicalRegion.X / _windowScale;
         var dipTop = _physicalRegion.Y / _windowScale;
         var dipWidth = _physicalRegion.Width / _windowScale;
         var dipHeight = _physicalRegion.Height / _windowScale;
+
+        var gap = BorderGapPhysical / _windowScale;
+        var rectWidth = dipWidth + 2 * (gap + BorderStroke);
+        var rectHeight = dipHeight + 2 * (gap + BorderStroke);
+        var rectLeft = dipLeft - gap - BorderStroke;
+        var rectTop = dipTop - gap - BorderStroke;
 
         _borderWindow = new Window
         {
@@ -91,31 +96,22 @@ public partial class RecordingOverlay : Window
             ShowInTaskbar = false,
             ShowActivated = false,
             ResizeMode = ResizeMode.NoResize,
-            Left = dipLeft - BorderPaddingDip,
-            Top = dipTop - BorderPaddingDip,
-            Width = dipWidth + BorderPaddingDip * 2,
-            Height = dipHeight + BorderPaddingDip * 2
+            Left = rectLeft - BorderStroke / 2,
+            Top = rectTop - BorderStroke / 2,
+            Width = rectWidth + BorderStroke,
+            Height = rectHeight + BorderStroke
         };
 
-        var host = new Grid
+        _borderWindow.Content = new Rectangle
         {
-            Background = Brushes.Transparent,
-            IsHitTestVisible = false
-        };
-
-        host.Children.Add(new Rectangle
-        {
-            Width = dipWidth,
-            Height = dipHeight,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
+            Width = rectWidth,
+            Height = rectHeight,
             Stroke = new SolidColorBrush(Color.FromRgb(255, 140, 0)),
-            StrokeThickness = stroke,
+            StrokeThickness = BorderStroke,
             Fill = Brushes.Transparent,
             IsHitTestVisible = false
-        });
+        };
 
-        _borderWindow.Content = host;
         _borderWindow.SourceInitialized += (_, _) => ApplyNoActivate(_borderWindow);
         _borderWindow.Show();
     }
