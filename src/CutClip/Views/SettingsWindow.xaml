@@ -1,0 +1,71 @@
+<Window x:Class="CutClip.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="CutClip Settings"
+        Height="500"
+        Width="400"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="FPS" FontWeight="SemiBold" Margin="0,0,0,4"/>
+        <ComboBox x:Name="FpsCombo" Grid.Row="1" Margin="0,0,0,16" SelectedIndex="1">
+            <ComboBoxItem Content="24"/>
+            <ComboBoxItem Content="30"/>
+            <ComboBoxItem Content="60"/>
+        </ComboBox>
+
+        <TextBlock Grid.Row="2" Text="Output Format" FontWeight="SemiBold" Margin="0,0,0,4"/>
+        <ComboBox x:Name="FormatCombo" Grid.Row="3" Margin="0,0,0,16" SelectedIndex="0">
+            <ComboBoxItem Content="MP4"/>
+            <ComboBoxItem Content="WebM"/>
+            <ComboBoxItem Content="GIF"/>
+        </ComboBox>
+
+        <TextBlock Grid.Row="4" Text="Countdown (seconds, 0 = off)" FontWeight="SemiBold" Margin="0,0,0,4"/>
+        <ComboBox x:Name="CountdownCombo" Grid.Row="5" Margin="0,0,0,16" SelectedIndex="0">
+            <ComboBoxItem Content="0"/>
+            <ComboBoxItem Content="3"/>
+            <ComboBoxItem Content="5"/>
+        </ComboBox>
+
+        <StackPanel Grid.Row="6" Margin="0,0,0,16">
+            <CheckBox x:Name="SystemAudioCheck" Content="Record system audio (requires FFmpeg with WASAPI or Stereo Mix)" Margin="0,0,0,8"/>
+            <CheckBox x:Name="MicCheck" Content="Record microphone" Margin="0,0,0,8"/>
+            <CheckBox x:Name="CopyToClipboardCheck" Content="Copy recording to clipboard when saved" Margin="0,0,0,8"/>
+            <CheckBox x:Name="DisableNotificationsCheck" Content="Disable tray notifications" Margin="0,0,0,8"/>
+            <TextBlock Margin="0,8,0,4" Text="Hotkey" FontWeight="SemiBold"/>
+            <TextBlock Margin="0,0,0,6" TextWrapping="Wrap" Foreground="#888"
+                       Text="Click the box below and press your shortcut (e.g. Alt + F). Press Esc to cancel capture."/>
+            <TextBox x:Name="HotkeyDisplay"
+                     Height="36"
+                     IsReadOnly="True"
+                     Focusable="True"
+                     Cursor="IBeam"
+                     VerticalContentAlignment="Center"
+                     FontFamily="Segoe UI"
+                     FontSize="14"
+                     Background="#F5F5F5"
+                     BorderBrush="#CCC"
+                     PreviewKeyDown="HotkeyCapture_PreviewKeyDown"
+                     GotFocus="HotkeyDisplay_GotFocus"
+                     LostFocus="HotkeyDisplay_LostFocus"
+                     MouseDown="HotkeyDisplay_MouseDown"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancel" Width="80" Margin="0,0,8,0" Click="Cancel_Click"/>
+            <Button Content="Save" Width="80" IsDefault="True" Click="Save_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

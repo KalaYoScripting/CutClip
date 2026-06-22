@@ -1,0 +1,2 @@
+RegisterHotKey
+UnregisterHotKey

@@ -1,0 +1,58 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore CutClip.sln
+
+      - name: Build
+        run: dotnet build CutClip.sln --configuration Release --no-restore
+
+      - name: Publish (self-contained single file)
+        run: >
+          dotnet publish src/CutClip/CutClip.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o ./artifacts
+
+      - name: Sign executable (optional)
+        if: ${{ secrets.WINDOWS_SIGNING_CERT != '' }}
+        shell: pwsh
+        run: |
+          $certBytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_SIGNING_CERT }}")
+          $certPath = "$env:RUNNER_TEMP\signing.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+          & signtool sign /f $certPath /p "${{ secrets.WINDOWS_SIGNING_PASSWORD }}" /tr http://timestamp.digicert.com /td sha256 /fd sha256 ./artifacts/CutClip.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CutClip-win-x64
+          path: ./artifacts/CutClip.exe
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./artifacts/CutClip.exe
+          generate_release_notes: true
