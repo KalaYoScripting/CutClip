@@ -45,11 +45,11 @@ public static class AudioCaptureService
                     return false;
                 }
 
-                mapArgs = "-filter_complex \"[1:a][2:a]amix=inputs=2:duration=longest[aout]\" -map 0:v -map \"[aout]\" -c:a aac -b:a 192k -shortest ";
+                mapArgs = "-filter_complex \"[1:a][2:a]amix=inputs=2:duration=longest[aout]\" -map 0:v -map \"[aout]\" -c:a aac -b:a 192k ";
             }
             else
             {
-                mapArgs = "-map 0:v -map 1:a -c:a aac -b:a 192k -shortest ";
+                mapArgs = "-map 0:v -map 1:a -c:a aac -b:a 192k ";
             }
 
             return true;
@@ -144,10 +144,10 @@ public static class AudioCaptureService
 
         if (systemAudio && microphone)
         {
-            return "-filter_complex \"[1:a][2:a]amix=inputs=2:duration=longest[aout]\" -map 0:v -map \"[aout]\" -c:a aac -b:a 192k -async 1 -shortest ";
+            return "-filter_complex \"[1:a][2:a]amix=inputs=2:duration=longest[aout]\" -map 0:v -map \"[aout]\" -c:a aac -b:a 192k ";
         }
 
-        return "-map 0:v -map 1:a -c:a aac -b:a 192k -async 1 -shortest ";
+        return "-map 0:v -map 1:a -c:a aac -b:a 192k ";
     }
 
     private static bool IsLoopbackDeviceName(string device) =>

@@ -22,6 +22,7 @@ public sealed class FFmpegEncoderService : IDisposable
     private string _audioMap = string.Empty;
     private bool _disposed;
     private NativeSystemAudioCapture? _nativeSystemAudio;
+    private int _videoFramesWritten;
 
     public string TempOutputPath => _tempOutputPath ?? throw new InvalidOperationException("Encoder not started.");
 
@@ -116,11 +117,19 @@ public sealed class FFmpegEncoderService : IDisposable
         return $"-y {BuildVideoInputArgs()}-vf \"fps={Math.Min(_fps, 15)},scale={_width}:{_height}:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse\" \"{_tempOutputPath}\"";
     }
 
+    public void SetAudioPaused(bool paused) =>
+        _nativeSystemAudio?.SetPaused(paused);
+
     public void WriteFrame(CaptureFrame frame)
     {
         if (_stdin is null || _disposed)
         {
             return;
+        }
+
+        if (Interlocked.Increment(ref _videoFramesWritten) == 1)
+        {
+            _nativeSystemAudio?.SignalVideoStarted();
         }
 
         _stdin.Write(frame.Data, 0, frame.Data.Length);

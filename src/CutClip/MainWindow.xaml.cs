@@ -46,12 +46,14 @@ public partial class MainWindow : Window
 
         _recordingService.RecordingStarted += (_, _) => Dispatcher.Invoke(OnRecordingStarted);
         _recordingService.RecordingStopped += (_, path) => Dispatcher.Invoke(() => OnRecordingStopped(path));
+        _recordingService.RecordingCancelled += (_, _) => Dispatcher.Invoke(OnRecordingCancelled);
         _recordingService.RecordingFailed += (_, message) => Dispatcher.Invoke(() => OnRecordingFailed(message));
         _recordingService.PauseStateChanged += (_, _) => Dispatcher.Invoke(OnPauseStateChanged);
 
         _recordingOverlay = new RecordingOverlay();
         _recordingOverlay.PauseToggleRequested += (_, _) => _recordingService.TogglePause();
         _recordingOverlay.SaveRequested += (_, _) => StopRecording();
+        _recordingOverlay.CancelRequested += (_, _) => CancelRecording();
         _countdownOverlay = new CountdownOverlay();
     }
 
@@ -174,6 +176,16 @@ public partial class MainWindow : Window
         await _recordingService.StopAsync().ConfigureAwait(true);
     }
 
+    private async void CancelRecording()
+    {
+        if (!_state.IsRecording)
+        {
+            return;
+        }
+
+        await _recordingService.CancelAsync().ConfigureAwait(true);
+    }
+
     private void OnRecordingStarted()
     {
         StopMenuItem.IsEnabled = true;
@@ -202,6 +214,13 @@ public partial class MainWindow : Window
         _lastSavedRecordingPath = path;
         _lastBalloonIsRecordingSaved = true;
         ShowNotification("CutClip", $"Recording saved — click to show in Explorer:\n{path}", BalloonIcon.Info);
+    }
+
+    private void OnRecordingCancelled()
+    {
+        StopMenuItem.IsEnabled = false;
+        _recordingOverlay?.HideOverlay();
+        _lastBalloonIsRecordingSaved = false;
     }
 
     private void OnRecordingFailed(string message)

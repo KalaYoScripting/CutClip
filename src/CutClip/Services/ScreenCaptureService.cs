@@ -89,7 +89,15 @@ public sealed class ScreenCaptureService : IDisposable
                 var cropped = CropFrame(frame);
                 if (cropped is not null && !frameQueue.IsAddingCompleted)
                 {
-                    if (!frameQueue.TryAdd(cropped, 0))
+                    try
+                    {
+                        frameQueue.Add(cropped, cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        cropped.Dispose();
+                    }
+                    catch (InvalidOperationException)
                     {
                         cropped.Dispose();
                     }

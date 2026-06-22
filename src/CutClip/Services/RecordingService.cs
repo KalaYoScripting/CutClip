@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Windows;
 using CutClip.Models;
 
@@ -17,6 +18,7 @@ public sealed class RecordingService : IDisposable
 
     public event EventHandler? RecordingStarted;
     public event EventHandler<string>? RecordingStopped;
+    public event EventHandler? RecordingCancelled;
     public event EventHandler<string>? RecordingFailed;
     public event EventHandler? PauseStateChanged;
 
@@ -57,6 +59,7 @@ public sealed class RecordingService : IDisposable
         }
 
         PauseStateChanged?.Invoke(this, EventArgs.Empty);
+        _encoder?.SetAudioPaused(_isPaused);
     }
 
     public async Task StartAsync(Rect region)
@@ -101,7 +104,7 @@ public sealed class RecordingService : IDisposable
             return;
         }
 
-        _frameQueue = new BlockingCollection<CaptureFrame>(boundedCapacity: 30);
+        _frameQueue = new BlockingCollection<CaptureFrame>(boundedCapacity: 120);
         _captureCts = new CancellationTokenSource();
         _captureService = new ScreenCaptureService();
         _encoder = new FFmpegEncoderService();
@@ -187,6 +190,45 @@ public sealed class RecordingService : IDisposable
         }
     }
 
+    public async Task CancelAsync()
+    {
+        if (!_state.IsRecording)
+        {
+            return;
+        }
+
+        _state.IsRecording = false;
+
+        try
+        {
+            _captureCts?.Cancel();
+            _captureService?.Stop();
+            _frameQueue?.CompleteAdding();
+
+            if (_encoderTask is not null)
+            {
+                try
+                {
+                    await _encoderTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Expected on cancel.
+                }
+            }
+
+            RecordingCancelled?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            RecordingFailed?.Invoke(this, ex.Message);
+        }
+        finally
+        {
+            DisposeCaptureResources();
+        }
+    }
+
     private void EncodeLoop(CancellationToken cancellationToken)
     {
         if (_frameQueue is null || _encoder is null)
@@ -194,19 +236,50 @@ public sealed class RecordingService : IDisposable
             return;
         }
 
+        var fps = Math.Max(1, _state.Fps);
+        var intervalTicks = Stopwatch.Frequency / fps;
+        var startTicks = Stopwatch.GetTimestamp();
+        long framesWritten = 0;
+        CaptureFrame? holdFrame = null;
+
         try
         {
-            foreach (var frame in _frameQueue.GetConsumingEnumerable(cancellationToken))
+            while (!cancellationToken.IsCancellationRequested)
             {
-                using (frame)
+                if (_isPaused)
                 {
-                    if (_isPaused)
+                    DiscardQueuedFrames();
+                    Thread.Sleep(10);
+                    continue;
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                DrainLatestFrame(ref holdFrame);
+
+                if (holdFrame is null)
+                {
+                    if (_frameQueue.IsAddingCompleted)
                     {
-                        continue;
+                        break;
                     }
 
-                    _encoder.WriteFrame(frame);
+                    Thread.Sleep(1);
+                    continue;
                 }
+
+                var targetTicks = startTicks + GetTotalPauseTicks() + framesWritten * intervalTicks;
+                WaitUntilTicks(targetTicks, cancellationToken);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                _encoder.WriteFrame(holdFrame);
+                framesWritten++;
             }
         }
         catch (OperationCanceledException)
@@ -216,6 +289,53 @@ public sealed class RecordingService : IDisposable
         catch (Exception)
         {
             // FFmpeg may exit before stop; allow finalize path to run.
+        }
+        finally
+        {
+            holdFrame?.Dispose();
+        }
+    }
+
+    private void DrainLatestFrame(ref CaptureFrame? holdFrame)
+    {
+        while (_frameQueue!.TryTake(out var frame))
+        {
+            holdFrame?.Dispose();
+            holdFrame = frame;
+        }
+    }
+
+    private void DiscardQueuedFrames()
+    {
+        while (_frameQueue!.TryTake(out var frame))
+        {
+            frame.Dispose();
+        }
+    }
+
+    private long GetTotalPauseTicks()
+    {
+        var paused = _pausedDuration;
+        if (_isPaused)
+        {
+            paused += DateTime.Now - _pauseStart;
+        }
+
+        return (long)(paused.TotalSeconds * Stopwatch.Frequency);
+    }
+
+    private static void WaitUntilTicks(long targetTicks, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var now = Stopwatch.GetTimestamp();
+            if (now >= targetTicks)
+            {
+                return;
+            }
+
+            var remainingMs = (targetTicks - now) * 1000 / Stopwatch.Frequency;
+            Thread.Sleep(remainingMs > 0 ? Math.Min((int)remainingMs, 50) : 1);
         }
     }
 

@@ -31,6 +31,13 @@
                     Padding="10,4"
                     FocusVisualStyle="{x:Null}"
                     Click="SaveButton_Click"/>
+            <Button x:Name="CancelButton"
+                    Content="Cancel"
+                    MinWidth="64"
+                    Margin="8,0,0,0"
+                    Padding="10,4"
+                    FocusVisualStyle="{x:Null}"
+                    Click="CancelButton_Click"/>
             <StackPanel Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
                 <Ellipse Width="8" Height="8" Fill="#FFEF4444" Margin="0,0,8,0"/>
                 <TextBlock x:Name="TimerText"

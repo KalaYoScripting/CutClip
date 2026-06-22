@@ -11,12 +11,14 @@ namespace CutClip.Services;
 /// </summary>
 public sealed class NativeSystemAudioCapture : IDisposable
 {
+    private readonly ManualResetEventSlim _videoStartedGate = new(false);
     private TcpListener? _listener;
     private NetworkStream? _stream;
     private WasapiLoopbackCapture? _capture;
     private Task? _captureTask;
     private CancellationTokenSource? _cts;
     private bool _disposed;
+    private volatile bool _paused;
     private int _port;
 
     public WaveFormat WaveFormat { get; private set; } = new(44100, 32, 2);
@@ -33,6 +35,12 @@ public sealed class NativeSystemAudioCapture : IDisposable
         _listener.Start();
         _port = ((IPEndPoint)_listener.LocalEndpoint).Port;
     }
+
+    public void SignalVideoStarted() =>
+        _videoStartedGate.Set();
+
+    public void SetPaused(bool paused) =>
+        _paused = paused;
 
     /// <summary>
     /// Waits for FFmpeg to connect, then starts WASAPI loopback capture. Call before FFmpeg process starts.
@@ -57,6 +65,8 @@ public sealed class NativeSystemAudioCapture : IDisposable
             using var client = _listener.AcceptTcpClient();
             _stream = client.GetStream();
 
+            _videoStartedGate.Wait(cancellationToken);
+
             _capture.DataAvailable += OnDataAvailable;
             _capture.StartRecording();
 
@@ -78,6 +88,11 @@ public sealed class NativeSystemAudioCapture : IDisposable
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
     {
+        if (_paused)
+        {
+            return;
+        }
+
         try
         {
             _stream?.Write(e.Buffer, 0, e.BytesRecorded);
@@ -105,6 +120,8 @@ public sealed class NativeSystemAudioCapture : IDisposable
         {
             // ignore
         }
+
+        _videoStartedGate.Set();
 
         if (_capture is not null)
         {
@@ -135,6 +152,7 @@ public sealed class NativeSystemAudioCapture : IDisposable
             // ignore
         }
 
+        _videoStartedGate.Dispose();
         _cts?.Dispose();
     }
 }

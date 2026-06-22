@@ -21,6 +21,7 @@ public partial class RecordingOverlay : Window
 
     public event EventHandler? PauseToggleRequested;
     public event EventHandler? SaveRequested;
+    public event EventHandler? CancelRequested;
 
     public RecordingOverlay()
     {
@@ -188,6 +189,9 @@ public partial class RecordingOverlay : Window
 
     private void SaveButton_Click(object sender, RoutedEventArgs e) =>
         SaveRequested?.Invoke(this, EventArgs.Empty);
+
+    private void CancelButton_Click(object sender, RoutedEventArgs e) =>
+        CancelRequested?.Invoke(this, EventArgs.Empty);
 
     private static void ApplyNoActivate(Window window)
     {
