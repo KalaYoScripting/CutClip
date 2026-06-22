@@ -1,3 +1,5 @@
+![alt text](build/banner.png)
+
 # CutClip
 
 **CutClip** is a lightweight Windows desktop utility for quick screen-region recording. Select any area of your screen, record it, and get a timestamped video saved automatically to your Videos folder.
