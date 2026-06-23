@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -171,15 +172,24 @@ public sealed class ScreenCaptureService : IDisposable
         try
         {
             var rowPitch = mapped.RowPitch;
-            var data = new byte[_cropWidth * _cropHeight * 4];
+            var rowBytes = _cropWidth * 4;
+            var byteLength = rowBytes * _cropHeight;
+            var data = ArrayPool<byte>.Shared.Rent(byteLength);
 
-            for (var y = 0; y < _cropHeight; y++)
+            if (rowPitch == rowBytes)
             {
-                var source = IntPtr.Add(mapped.DataPointer, y * (int)rowPitch);
-                Marshal.Copy(source, data, y * _cropWidth * 4, _cropWidth * 4);
+                Marshal.Copy(mapped.DataPointer, data, 0, byteLength);
+            }
+            else
+            {
+                for (var y = 0; y < _cropHeight; y++)
+                {
+                    var source = IntPtr.Add(mapped.DataPointer, y * (int)rowPitch);
+                    Marshal.Copy(source, data, y * rowBytes, rowBytes);
+                }
             }
 
-            return new CaptureFrame(data, _cropWidth, _cropHeight);
+            return new CaptureFrame(data, _cropWidth, _cropHeight, byteLength);
         }
         finally
         {
@@ -247,20 +257,38 @@ public sealed class ScreenCaptureService : IDisposable
 
 public sealed class CaptureFrame : IDisposable
 {
-    public CaptureFrame(byte[] data, int width, int height)
+    private byte[]? _buffer;
+    private bool _disposed;
+
+    public CaptureFrame(byte[] buffer, int width, int height, int byteLength)
     {
-        Data = data;
+        _buffer = buffer;
         Width = width;
         Height = height;
+        ByteLength = byteLength;
     }
 
-    public byte[] Data { get; }
+    public byte[] Data => _buffer ?? throw new ObjectDisposedException(nameof(CaptureFrame));
+
     public int Width { get; }
+
     public int Height { get; }
+
+    public int ByteLength { get; }
 
     public void Dispose()
     {
-        // byte[] is managed; nothing to dispose
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        if (_buffer is not null)
+        {
+            ArrayPool<byte>.Shared.Return(_buffer);
+            _buffer = null;
+        }
     }
 }
 

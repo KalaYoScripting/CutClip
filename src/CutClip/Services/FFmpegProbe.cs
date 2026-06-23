@@ -102,7 +102,7 @@ public static class FFmpegProbe
         {
             using var process = Process.Start(new ProcessStartInfo
             {
-                FileName = "ffmpeg",
+                FileName = FfmpegLocator.ResolveExecutable(),
                 Arguments = arguments,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,

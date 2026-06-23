@@ -1,7 +1,5 @@
 using System.Diagnostics;
 using System.IO;
-using CutClip.Models;
-using FFMpegCore;
 
 namespace CutClip.Services;
 
@@ -50,8 +48,6 @@ public sealed class FFmpegEncoderService : IDisposable
         _tempOutputPath = OutputPathService.GenerateTempPath(format);
         TempFileService.Track(_tempOutputPath);
 
-        ConfigureFFmpegPath();
-
         var args = format.ToLowerInvariant() switch
         {
             "webm" => BuildWebmArgs(),
@@ -61,7 +57,7 @@ public sealed class FFmpegEncoderService : IDisposable
 
         var startInfo = new ProcessStartInfo
         {
-            FileName = "ffmpeg",
+            FileName = FfmpegLocator.ResolveExecutable(),
             Arguments = args,
             UseShellExecute = false,
             RedirectStandardInput = true,
@@ -99,17 +95,17 @@ public sealed class FFmpegEncoderService : IDisposable
 
     private string BuildVideoOutputArgs()
     {
-        return $"-c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {_fps} ";
+        return $"-c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {_fps} -threads 0 ";
     }
 
     private string BuildMp4Args()
     {
-        return $"-y -thread_queue_size 1024 {BuildVideoInputArgs()}{_nativeAudioInput}{_audioInput}{BuildVideoOutputArgs()}{_audioMap}-movflags +faststart \"{_tempOutputPath}\"";
+        return $"-y -thread_queue_size 128 {BuildVideoInputArgs()}{_nativeAudioInput}{_audioInput}{BuildVideoOutputArgs()}{_audioMap}-movflags +faststart \"{_tempOutputPath}\"";
     }
 
     private string BuildWebmArgs()
     {
-        return $"-y -thread_queue_size 1024 {BuildVideoInputArgs()}{_nativeAudioInput}{_audioInput}-c:v libvpx-vp9 -pix_fmt yuv420p -r {_fps} {_audioMap}\"{_tempOutputPath}\"";
+        return $"-y -thread_queue_size 128 {BuildVideoInputArgs()}{_nativeAudioInput}{_audioInput}-c:v libvpx-vp9 -deadline realtime -cpu-used 8 -pix_fmt yuv420p -r {_fps} {_audioMap}\"{_tempOutputPath}\"";
     }
 
     private string BuildGifArgs()
@@ -132,7 +128,7 @@ public sealed class FFmpegEncoderService : IDisposable
             _nativeSystemAudio?.SignalVideoStarted();
         }
 
-        _stdin.Write(frame.Data, 0, frame.Data.Length);
+        _stdin.Write(frame.Data, 0, frame.ByteLength);
     }
 
     public async Task<string?> StopAsync(string finalOutputPath)
@@ -195,38 +191,6 @@ public sealed class FFmpegEncoderService : IDisposable
             _ffmpegProcess = null;
             _stdin = null;
         }
-    }
-
-    private static void ConfigureFFmpegPath()
-    {
-        GlobalFFOptions.Configure(options =>
-        {
-            options.BinaryFolder = FindFFmpegDirectory() ?? options.BinaryFolder;
-        });
-    }
-
-    private static string? FindFFmpegDirectory()
-    {
-        var paths = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-
-        foreach (var dir in paths)
-        {
-            var candidate = Path.Combine(dir, "ffmpeg.exe");
-            if (File.Exists(candidate))
-            {
-                return dir;
-            }
-        }
-
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var bundled = Path.Combine(localAppData, "CutClip", "ffmpeg");
-        if (File.Exists(Path.Combine(bundled, "ffmpeg.exe")))
-        {
-            return bundled;
-        }
-
-        return null;
     }
 
     public void Dispose()

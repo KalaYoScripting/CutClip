@@ -49,12 +49,21 @@ public partial class MainWindow : Window
         _recordingService.RecordingCancelled += (_, _) => Dispatcher.Invoke(OnRecordingCancelled);
         _recordingService.RecordingFailed += (_, message) => Dispatcher.Invoke(() => OnRecordingFailed(message));
         _recordingService.PauseStateChanged += (_, _) => Dispatcher.Invoke(OnPauseStateChanged);
+    }
 
-        _recordingOverlay = new RecordingOverlay();
-        _recordingOverlay.PauseToggleRequested += (_, _) => _recordingService.TogglePause();
-        _recordingOverlay.SaveRequested += (_, _) => StopRecording();
-        _recordingOverlay.CancelRequested += (_, _) => CancelRecording();
-        _countdownOverlay = new CountdownOverlay();
+    private RecordingOverlay RecordingOverlay =>
+        _recordingOverlay ??= CreateRecordingOverlay();
+
+    private CountdownOverlay CountdownOverlay =>
+        _countdownOverlay ??= new CountdownOverlay();
+
+    private RecordingOverlay CreateRecordingOverlay()
+    {
+        var overlay = new RecordingOverlay();
+        overlay.PauseToggleRequested += (_, _) => _recordingService.TogglePause();
+        overlay.SaveRequested += (_, _) => StopRecording();
+        overlay.CancelRequested += (_, _) => CancelRecording();
+        return overlay;
     }
 
     private static bool ScreenCaptureServiceSupported()
@@ -144,21 +153,17 @@ public partial class MainWindow : Window
 
     private async Task RunCountdownAsync(Rect region)
     {
-        if (_countdownOverlay is null)
-        {
-            return;
-        }
-
-        _countdownOverlay.PositionAt(region);
-        _countdownOverlay.Show();
+        var overlay = CountdownOverlay;
+        overlay.PositionAt(region);
+        overlay.Show();
 
         for (var i = _state.CountdownSeconds; i > 0; i--)
         {
-            _countdownOverlay.SetCount(i);
+            overlay.SetCount(i);
             await Task.Delay(1000).ConfigureAwait(true);
         }
 
-        _countdownOverlay.Hide();
+        overlay.Hide();
     }
 
     private void StopRecording_Click(object sender, RoutedEventArgs e)
@@ -189,7 +194,7 @@ public partial class MainWindow : Window
     private void OnRecordingStarted()
     {
         StopMenuItem.IsEnabled = true;
-        _recordingOverlay?.ShowForRegion(
+        RecordingOverlay.ShowForRegion(
             _state.SelectedRegion,
             _state.StartTime,
             () => _recordingService.GetElapsed());
@@ -198,13 +203,13 @@ public partial class MainWindow : Window
 
     private void OnPauseStateChanged()
     {
-        _recordingOverlay?.SetPaused(_recordingService.IsPaused);
+        RecordingOverlay.SetPaused(_recordingService.IsPaused);
     }
 
     private void OnRecordingStopped(string path)
     {
         StopMenuItem.IsEnabled = false;
-        _recordingOverlay?.HideOverlay();
+        RecordingOverlay.HideOverlay();
 
         if (_state.CopyRecordingToClipboard)
         {
@@ -219,14 +224,14 @@ public partial class MainWindow : Window
     private void OnRecordingCancelled()
     {
         StopMenuItem.IsEnabled = false;
-        _recordingOverlay?.HideOverlay();
+        RecordingOverlay.HideOverlay();
         _lastBalloonIsRecordingSaved = false;
     }
 
     private void OnRecordingFailed(string message)
     {
         StopMenuItem.IsEnabled = false;
-        _recordingOverlay?.HideOverlay();
+        RecordingOverlay.HideOverlay();
         _lastBalloonIsRecordingSaved = false;
         ShowNotification("CutClip", message, BalloonIcon.Error);
     }
@@ -280,7 +285,7 @@ public partial class MainWindow : Window
         _hotkeyManager?.Dispose();
         _hotkeyHostWindow?.Close();
         _recordingService.Dispose();
-        _recordingOverlay?.HideOverlay();
+        RecordingOverlay.HideOverlay();
         _recordingOverlay?.Close();
         _countdownOverlay?.Close();
         TempFileService.CleanupAll();

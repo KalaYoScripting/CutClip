@@ -104,21 +104,23 @@ public sealed class RecordingService : IDisposable
             return;
         }
 
-        _frameQueue = new BlockingCollection<CaptureFrame>(boundedCapacity: 120);
+        _frameQueue = new BlockingCollection<CaptureFrame>(boundedCapacity: 4);
         _captureCts = new CancellationTokenSource();
         _captureService = new ScreenCaptureService();
         _encoder = new FFmpegEncoderService();
 
         try
         {
-            await Task.Run(() =>
+            var encoderStartTask = Task.Run(() =>
             {
                 _encoder!.Start(width, height, fps, format, _state.RecordSystemAudio, _state.RecordMicrophone);
-            }).ConfigureAwait(true);
+            });
+
+            _captureService!.Start(captureRegion, fps, _frameQueue, _captureCts.Token);
+
+            await encoderStartTask.ConfigureAwait(true);
 
             _tempPath = _encoder.TempOutputPath;
-
-            _captureService.Start(captureRegion, fps, _frameQueue, _captureCts.Token);
 
             _encoderTask = Task.Run(() => EncodeLoop(_captureCts.Token), _captureCts.Token);
 
@@ -334,8 +336,16 @@ public sealed class RecordingService : IDisposable
                 return;
             }
 
-            var remainingMs = (targetTicks - now) * 1000 / Stopwatch.Frequency;
-            Thread.Sleep(remainingMs > 0 ? Math.Min((int)remainingMs, 50) : 1);
+            var remainingTicks = targetTicks - now;
+            if (remainingTicks > Stopwatch.Frequency / 500)
+            {
+                var remainingMs = remainingTicks * 1000 / Stopwatch.Frequency;
+                Thread.Sleep(remainingMs > 0 ? Math.Min((int)remainingMs, 16) : 1);
+            }
+            else
+            {
+                Thread.SpinWait(50);
+            }
         }
     }
 
