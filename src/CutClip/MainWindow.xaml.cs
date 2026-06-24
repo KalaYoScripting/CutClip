@@ -44,11 +44,23 @@ public partial class MainWindow : Window
         _hotkeyManager.HotkeyPressed += (_, _) => Dispatcher.Invoke(ToggleRecording);
         RegisterHotkey();
 
-        _recordingService.RecordingStarted += (_, _) => Dispatcher.Invoke(OnRecordingStarted);
-        _recordingService.RecordingStopped += (_, path) => Dispatcher.Invoke(() => OnRecordingStopped(path));
-        _recordingService.RecordingCancelled += (_, _) => Dispatcher.Invoke(OnRecordingCancelled);
-        _recordingService.RecordingFailed += (_, message) => Dispatcher.Invoke(() => OnRecordingFailed(message));
-        _recordingService.PauseStateChanged += (_, _) => Dispatcher.Invoke(OnPauseStateChanged);
+        _recordingService.RecordingStarted += (_, _) => BeginUi(OnRecordingStarted);
+        _recordingService.RecordingStopping += (_, _) => BeginUi(OnRecordingStopping);
+        _recordingService.RecordingStopped += (_, path) => BeginUi(() => OnRecordingStopped(path));
+        _recordingService.RecordingCancelled += (_, _) => BeginUi(OnRecordingCancelled);
+        _recordingService.RecordingFailed += (_, message) => BeginUi(() => OnRecordingFailed(message));
+        _recordingService.PauseStateChanged += (_, _) => BeginUi(OnPauseStateChanged);
+    }
+
+    private void BeginUi(Action action)
+    {
+        if (Dispatcher.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        Dispatcher.BeginInvoke(action);
     }
 
     private RecordingOverlay RecordingOverlay =>
@@ -191,8 +203,15 @@ public partial class MainWindow : Window
         await _recordingService.CancelAsync().ConfigureAwait(true);
     }
 
+    private void OnRecordingStopping()
+    {
+        StopMenuItem.IsEnabled = false;
+        _recordingOverlay?.HideOverlay();
+    }
+
     private void OnRecordingStarted()
     {
+        TrayIcon.ToolTipText = "CutClip — Screen Region Recorder";
         StopMenuItem.IsEnabled = true;
         RecordingOverlay.ShowForRegion(
             _state.SelectedRegion,
@@ -208,31 +227,45 @@ public partial class MainWindow : Window
 
     private void OnRecordingStopped(string path)
     {
-        StopMenuItem.IsEnabled = false;
-        RecordingOverlay.HideOverlay();
-
         if (_state.CopyRecordingToClipboard)
         {
-            ClipboardService.CopyFile(path);
+            try
+            {
+                ClipboardService.CopyFile(path);
+            }
+            catch
+            {
+                // Clipboard can fail if another app holds it; save still succeeded.
+            }
         }
 
         _lastSavedRecordingPath = path;
         _lastBalloonIsRecordingSaved = true;
+
+        if (_state.DisableNotifications)
+        {
+            TrayIcon.ToolTipText = $"CutClip — Saved {Path.GetFileName(path)}";
+            return;
+        }
+
         ShowNotification("CutClip", $"Recording saved — click to show in Explorer:\n{path}", BalloonIcon.Info);
     }
 
     private void OnRecordingCancelled()
     {
-        StopMenuItem.IsEnabled = false;
-        RecordingOverlay.HideOverlay();
         _lastBalloonIsRecordingSaved = false;
     }
 
     private void OnRecordingFailed(string message)
     {
-        StopMenuItem.IsEnabled = false;
-        RecordingOverlay.HideOverlay();
         _lastBalloonIsRecordingSaved = false;
+
+        if (_state.DisableNotifications)
+        {
+            TrayIcon.ToolTipText = "CutClip — Recording failed to save";
+            return;
+        }
+
         ShowNotification("CutClip", message, BalloonIcon.Error);
     }
 
@@ -285,7 +318,7 @@ public partial class MainWindow : Window
         _hotkeyManager?.Dispose();
         _hotkeyHostWindow?.Close();
         _recordingService.Dispose();
-        RecordingOverlay.HideOverlay();
+        _recordingOverlay?.HideOverlay();
         _recordingOverlay?.Close();
         _countdownOverlay?.Close();
         TempFileService.CleanupAll();

@@ -15,7 +15,9 @@ public sealed class RecordingService : IDisposable
     private Task? _encoderTask;
     private string? _tempPath;
     private bool _disposed;
+    private int _stopInProgress;
 
+    public event EventHandler? RecordingStopping;
     public event EventHandler? RecordingStarted;
     public event EventHandler<string>? RecordingStopped;
     public event EventHandler? RecordingCancelled;
@@ -104,25 +106,23 @@ public sealed class RecordingService : IDisposable
             return;
         }
 
-        _frameQueue = new BlockingCollection<CaptureFrame>(boundedCapacity: 4);
+        _frameQueue = new BlockingCollection<CaptureFrame>(boundedCapacity: 32);
         _captureCts = new CancellationTokenSource();
         _captureService = new ScreenCaptureService();
         _encoder = new FFmpegEncoderService();
 
         try
         {
-            var encoderStartTask = Task.Run(() =>
+            await Task.Run(() =>
             {
                 _encoder!.Start(width, height, fps, format, _state.RecordSystemAudio, _state.RecordMicrophone);
-            });
-
-            _captureService!.Start(captureRegion, fps, _frameQueue, _captureCts.Token);
-
-            await encoderStartTask.ConfigureAwait(true);
+            }).ConfigureAwait(true);
 
             _tempPath = _encoder.TempOutputPath;
 
             _encoderTask = Task.Run(() => EncodeLoop(_captureCts.Token), _captureCts.Token);
+
+            _captureService.Start(captureRegion, fps, _frameQueue, _captureCts.Token);
 
             RecordingStarted?.Invoke(this, EventArgs.Empty);
         }
@@ -141,17 +141,19 @@ public sealed class RecordingService : IDisposable
             return null;
         }
 
-        _state.IsRecording = false;
+        if (Interlocked.CompareExchange(ref _stopInProgress, 1, 0) != 0)
+        {
+            return null;
+        }
 
         try
         {
-            _captureCts?.Cancel();
-            _captureService?.Stop();
-            _frameQueue?.CompleteAdding();
+            RecordingStopping?.Invoke(this, EventArgs.Empty);
+            SignalStopCapture();
 
             if (_encoderTask is not null)
             {
-                await _encoderTask.ConfigureAwait(false);
+                await WaitForEncoderTaskAsync().ConfigureAwait(false);
             }
 
             var finalPath = _state.OutputFilePath;
@@ -172,22 +174,28 @@ public sealed class RecordingService : IDisposable
                 };
 
                 RecentRecordingsService.Add(metadata);
-                RecordingStopped?.Invoke(this, savedPath);
+                InvokeRecordingStopped(savedPath);
             }
             else
             {
-                RecordingFailed?.Invoke(this, "Recording failed to finalize.");
+                var detail = _encoder?.GetLastErrorSummary();
+                var message = string.IsNullOrWhiteSpace(detail)
+                    ? "Recording failed to finalize."
+                    : $"Recording failed to finalize: {detail}";
+                InvokeRecordingFailed(message);
             }
 
             return savedPath;
         }
         catch (Exception ex)
         {
-            RecordingFailed?.Invoke(this, ex.Message);
+            InvokeRecordingFailed(ex.Message);
             return null;
         }
         finally
         {
+            _state.IsRecording = false;
+            Interlocked.Exchange(ref _stopInProgress, 0);
             DisposeCaptureResources();
         }
     }
@@ -199,35 +207,100 @@ public sealed class RecordingService : IDisposable
             return;
         }
 
-        _state.IsRecording = false;
+        if (Interlocked.CompareExchange(ref _stopInProgress, 1, 0) != 0)
+        {
+            return;
+        }
 
         try
         {
-            _captureCts?.Cancel();
-            _captureService?.Stop();
-            _frameQueue?.CompleteAdding();
+            RecordingStopping?.Invoke(this, EventArgs.Empty);
+            SignalStopCapture();
 
             if (_encoderTask is not null)
             {
-                try
-                {
-                    await _encoderTask.ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    // Expected on cancel.
-                }
+                await WaitForEncoderTaskAsync().ConfigureAwait(false);
             }
 
-            RecordingCancelled?.Invoke(this, EventArgs.Empty);
+            InvokeRecordingCancelled();
         }
         catch (Exception ex)
         {
-            RecordingFailed?.Invoke(this, ex.Message);
+            InvokeRecordingFailed(ex.Message);
         }
         finally
         {
+            _state.IsRecording = false;
+            Interlocked.Exchange(ref _stopInProgress, 0);
             DisposeCaptureResources();
+        }
+    }
+
+    private void InvokeRecordingStopped(string path)
+    {
+        try
+        {
+            RecordingStopped?.Invoke(this, path);
+        }
+        catch
+        {
+            // Save already completed; UI handlers must not affect the result.
+        }
+    }
+
+    private void InvokeRecordingFailed(string message)
+    {
+        try
+        {
+            RecordingFailed?.Invoke(this, message);
+        }
+        catch
+        {
+            // ignore UI handler errors
+        }
+    }
+
+    private void InvokeRecordingCancelled()
+    {
+        try
+        {
+            RecordingCancelled?.Invoke(this, EventArgs.Empty);
+        }
+        catch
+        {
+            // ignore UI handler errors
+        }
+    }
+
+    private void SignalStopCapture()
+    {
+        _captureService?.Stop();
+        _frameQueue?.CompleteAdding();
+        _captureCts?.Cancel();
+    }
+
+    private async Task WaitForEncoderTaskAsync()
+    {
+        if (_encoderTask is null)
+        {
+            return;
+        }
+
+        var completed = await Task.WhenAny(_encoderTask, Task.Delay(TimeSpan.FromSeconds(30)))
+            .ConfigureAwait(false);
+
+        if (completed != _encoderTask)
+        {
+            return;
+        }
+
+        try
+        {
+            await _encoderTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on cancel.
         }
     }
 
@@ -246,42 +319,66 @@ public sealed class RecordingService : IDisposable
 
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
+            while (true)
             {
-                if (_isPaused)
+                var stopRequested = cancellationToken.IsCancellationRequested
+                    || (_frameQueue?.IsAddingCompleted ?? false);
+
+                if (_isPaused && !stopRequested)
                 {
                     DiscardQueuedFrames();
-                    Thread.Sleep(10);
-                    continue;
-                }
-
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    break;
+                    if (cancellationToken.WaitHandle.WaitOne(10))
+                    {
+                        stopRequested = true;
+                    }
+                    else
+                    {
+                        continue;
+                    }
                 }
 
                 DrainLatestFrame(ref holdFrame);
 
                 if (holdFrame is null)
                 {
-                    if (_frameQueue.IsAddingCompleted)
+                    if (stopRequested)
                     {
                         break;
                     }
 
-                    Thread.Sleep(1);
+                    if (cancellationToken.WaitHandle.WaitOne(1))
+                    {
+                        continue;
+                    }
+
                     continue;
                 }
 
-                var targetTicks = startTicks + GetTotalPauseTicks() + framesWritten * intervalTicks;
-                WaitUntilTicks(targetTicks, cancellationToken);
-                if (cancellationToken.IsCancellationRequested)
+                if (!stopRequested)
                 {
+                    var targetTicks = startTicks + GetTotalPauseTicks() + framesWritten * intervalTicks;
+                    WaitUntilTicks(targetTicks, cancellationToken);
+                    stopRequested = cancellationToken.IsCancellationRequested
+                        || (_frameQueue?.IsAddingCompleted ?? false);
+                }
+
+                try
+                {
+                    _encoder.EnqueueFrame(holdFrame, cancellationToken);
+                    framesWritten++;
+                    holdFrame = null;
+                }
+                catch (OperationCanceledException)
+                {
+                    holdFrame?.Dispose();
+                    holdFrame = null;
                     break;
                 }
 
-                _encoder.WriteFrame(holdFrame);
-                framesWritten++;
+                if (stopRequested && holdFrame is null && _frameQueue!.Count == 0)
+                {
+                    break;
+                }
             }
         }
         catch (OperationCanceledException)
@@ -295,6 +392,7 @@ public sealed class RecordingService : IDisposable
         finally
         {
             holdFrame?.Dispose();
+            _encoder?.CompleteFrameWriting();
         }
     }
 

@@ -90,15 +90,7 @@ public sealed class ScreenCaptureService : IDisposable
                 var cropped = CropFrame(frame);
                 if (cropped is not null && !frameQueue.IsAddingCompleted)
                 {
-                    try
-                    {
-                        frameQueue.Add(cropped, cancellationToken);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        cropped.Dispose();
-                    }
-                    catch (InvalidOperationException)
+                    if (!frameQueue.TryAdd(cropped, 0))
                     {
                         cropped.Dispose();
                     }
@@ -107,6 +99,10 @@ public sealed class ScreenCaptureService : IDisposable
             catch (ObjectDisposedException)
             {
                 // Shutting down
+            }
+            catch (Exception)
+            {
+                // Never crash the process from the WGC frame callback.
             }
         };
 

@@ -33,7 +33,7 @@ jobs:
           --self-contained true
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
-          -o ./artifacts
+          -o ./artifacts/build
 
       - name: Sign executable (optional)
         if: ${{ secrets.WINDOWS_SIGNING_CERT != '' }}
@@ -42,17 +42,38 @@ jobs:
           $certBytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_SIGNING_CERT }}")
           $certPath = "$env:RUNNER_TEMP\signing.pfx"
           [IO.File]::WriteAllBytes($certPath, $certBytes)
-          & signtool sign /f $certPath /p "${{ secrets.WINDOWS_SIGNING_PASSWORD }}" /tr http://timestamp.digicert.com /td sha256 /fd sha256 ./artifacts/CutClip.exe
+          & signtool sign /f $certPath /p "${{ secrets.WINDOWS_SIGNING_PASSWORD }}" /tr http://timestamp.digicert.com /td sha256 /fd sha256 ./artifacts/build/CutClip.exe
+
+      - name: Install Inno Setup
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v',''
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc installer/CutClip.iss "/DMyAppVersion=$version"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: CutClip-win-x64
-          path: ./artifacts/CutClip.exe
+          path: ./artifacts/build/CutClip.exe
+
+      - name: Upload installer artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: CutClip-installer
+          path: ./artifacts/installer/CutClip-Setup-*.exe
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ./artifacts/CutClip.exe
+          files: |
+            ./artifacts/build/CutClip.exe
+            ./artifacts/installer/CutClip-Setup-*.exe
           generate_release_notes: true

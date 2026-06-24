@@ -1,106 +1,97 @@
-using System.Net;
-using System.Net.Sockets;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace CutClip.Services;
 
 /// <summary>
-/// Captures system audio via WASAPI loopback and streams it to FFmpeg over TCP.
-/// Used when FFmpeg on PATH lacks WASAPI support (Stereo Mix often captures silence).
+/// Captures system audio via WASAPI loopback to a sidecar WAV file (muxed after recording).
+/// Avoids blocking the video pipe when FFmpeg reads audio over TCP during live encode.
 /// </summary>
 public sealed class NativeSystemAudioCapture : IDisposable
 {
-    private readonly ManualResetEventSlim _videoStartedGate = new(false);
-    private TcpListener? _listener;
-    private NetworkStream? _stream;
     private WasapiLoopbackCapture? _capture;
-    private Task? _captureTask;
-    private CancellationTokenSource? _cts;
+    private WaveFileWriter? _writer;
+    private WaveFormat? _writeFormat;
+    private byte[]? _pcm16Buffer;
+    private string? _tempWavPath;
     private bool _disposed;
     private volatile bool _paused;
-    private int _port;
 
-    public WaveFormat WaveFormat { get; private set; } = new(44100, 32, 2);
-
-    public string BuildFfmpegInputArgs() =>
-        $"-thread_queue_size 512 -f f32le -ar {WaveFormat.SampleRate} -ac {WaveFormat.Channels} -i tcp://127.0.0.1:{_port} ";
+    public string? TempWavPath => _tempWavPath;
 
     public void Prepare()
     {
         _capture = new WasapiLoopbackCapture();
-        WaveFormat = _capture.WaveFormat;
-
-        _listener = new TcpListener(IPAddress.Loopback, 0);
-        _listener.Start();
-        _port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        _tempWavPath = Path.Combine(Path.GetTempPath(), $"CutClip_{Guid.NewGuid():N}.wav");
+        TempFileService.Track(_tempWavPath);
+        _writeFormat = new WaveFormat(_capture.WaveFormat.SampleRate, 16, _capture.WaveFormat.Channels);
     }
 
-    public void SignalVideoStarted() =>
-        _videoStartedGate.Set();
+    public void BeginCapture()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (_capture is null || _tempWavPath is null || _writeFormat is null)
+        {
+            throw new InvalidOperationException("Audio capture not prepared.");
+        }
+
+        _writer = new WaveFileWriter(_tempWavPath, _writeFormat);
+        _capture.DataAvailable += OnDataAvailable;
+        _capture.StartRecording();
+    }
+
+    public void SignalVideoStarted()
+    {
+        // Sidecar audio starts with recording; kept for API compatibility.
+    }
 
     public void SetPaused(bool paused) =>
         _paused = paused;
 
-    /// <summary>
-    /// Waits for FFmpeg to connect, then starts WASAPI loopback capture. Call before FFmpeg process starts.
-    /// </summary>
-    public void BeginCaptureAfterFfmpegStarted()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        _cts = new CancellationTokenSource();
-        _captureTask = Task.Run(() => CaptureLoop(_cts.Token), _cts.Token);
-    }
-
-    private void CaptureLoop(CancellationToken cancellationToken)
-    {
-        try
-        {
-            if (_listener is null || _capture is null)
-            {
-                return;
-            }
-
-            using var client = _listener.AcceptTcpClient();
-            _stream = client.GetStream();
-
-            _videoStartedGate.Wait(cancellationToken);
-
-            _capture.DataAvailable += OnDataAvailable;
-            _capture.StartRecording();
-
-            using var waitHandle = cancellationToken.WaitHandle;
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                waitHandle.WaitOne(100);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected on stop.
-        }
-        catch
-        {
-            // Capture loop failed; allow finalize path to run.
-        }
-    }
-
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
     {
-        if (_paused)
+        if (_paused || e.BytesRecorded <= 0 || _writer is null || _capture is null)
         {
             return;
         }
 
         try
         {
-            _stream?.Write(e.Buffer, 0, e.BytesRecorded);
+            if (_capture.WaveFormat.Encoding == WaveFormatEncoding.IeeeFloat)
+            {
+                var outputBytes = ConvertFloatToPcm16(e.Buffer, e.BytesRecorded);
+                _writer.Write(_pcm16Buffer!, 0, outputBytes);
+                return;
+            }
+
+            _writer.Write(e.Buffer, 0, e.BytesRecorded);
         }
-        catch (IOException)
+        catch
         {
-            // FFmpeg closed the connection.
+            // Best-effort while recording.
         }
+    }
+
+    private int ConvertFloatToPcm16(byte[] input, int bytesRecorded)
+    {
+        var sampleCount = bytesRecorded / 4;
+        var outputBytes = sampleCount * 2;
+        if (_pcm16Buffer is null || _pcm16Buffer.Length < outputBytes)
+        {
+            _pcm16Buffer = new byte[outputBytes];
+        }
+
+        for (var i = 0; i < sampleCount; i++)
+        {
+            var sample = BitConverter.ToSingle(input, i * 4);
+            sample = Math.Clamp(sample, -1f, 1f);
+            var pcm = (short)(sample * short.MaxValue);
+            _pcm16Buffer[i * 2] = (byte)(pcm & 0xFF);
+            _pcm16Buffer[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+        }
+
+        return outputBytes;
     }
 
     public void Dispose()
@@ -112,17 +103,6 @@ public sealed class NativeSystemAudioCapture : IDisposable
 
         _disposed = true;
 
-        try
-        {
-            _cts?.Cancel();
-        }
-        catch
-        {
-            // ignore
-        }
-
-        _videoStartedGate.Set();
-
         if (_capture is not null)
         {
             _capture.DataAvailable -= OnDataAvailable;
@@ -132,27 +112,10 @@ public sealed class NativeSystemAudioCapture : IDisposable
             }
 
             _capture.Dispose();
+            _capture = null;
         }
 
-        try
-        {
-            _stream?.Close();
-        }
-        catch
-        {
-            // ignore
-        }
-
-        try
-        {
-            _listener?.Stop();
-        }
-        catch
-        {
-            // ignore
-        }
-
-        _videoStartedGate.Dispose();
-        _cts?.Dispose();
+        _writer?.Dispose();
+        _writer = null;
     }
 }

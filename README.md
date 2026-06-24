@@ -58,10 +58,32 @@ dotnet publish src/CutClip/CutClip.csproj `
   -r win-x64 `
   --self-contained true `
   -p:PublishSingleFile=true `
-  -o ./artifacts
+  -o ./artifacts/build
 ```
 
-The output is `./artifacts/CutClip.exe`.
+The output is `./artifacts/build/CutClip.exe`.
+
+### Build Windows installer
+
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php).
+
+```powershell
+dotnet publish src/CutClip/CutClip.csproj -c Release -o ./artifacts/build
+.\installer\build-installer.ps1 -Version 1.0.0
+```
+
+Output: `./artifacts/installer/CutClip-Setup-1.0.0.exe`
+
+### GitHub release
+
+Push a version tag to build and publish both the portable exe and installer:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+See [installer/README.md](installer/README.md) for details.
 
 ## Usage
 
@@ -76,6 +98,7 @@ The output is `./artifacts/CutClip.exe`.
 ```
 CutClip/
 ├── build/               App icon and banner assets
+├── installer/           Inno Setup script and build helper
 ├── src/CutClip/
 │   ├── Models/          AppState, hotkey binding, recording metadata
 │   ├── Views/           Overlays, settings, recent recordings

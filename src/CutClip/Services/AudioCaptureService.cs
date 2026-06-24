@@ -1,8 +1,8 @@
 namespace CutClip.Services;
 
 /// <summary>
-/// Builds FFmpeg audio input arguments using WASAPI when available, otherwise DirectShow.
-/// System audio falls back to native WASAPI loopback when FFmpeg lacks WASAPI (Stereo Mix is unreliable).
+/// Builds FFmpeg audio input arguments. System audio is always captured to a sidecar WAV
+/// (native WASAPI loopback) because live FFmpeg audio mux blocks the video pipe.
 /// </summary>
 public static class AudioCaptureService
 {
@@ -27,35 +27,39 @@ public static class AudioCaptureService
             return true;
         }
 
-        if (FFmpegProbe.IsWasapiSupported())
-        {
-            BuildWasapi(systemAudio, microphone, out inputArgs, out mapArgs);
-            return true;
-        }
-
+        // System audio always uses a sidecar WAV — live FFmpeg mux (WASAPI or TCP) blocks video stdin.
         if (systemAudio)
         {
             useNativeSystemLoopback = true;
 
             if (microphone)
             {
-                var micResult = TryBuildDshow(systemAudio: false, microphone: true, out inputArgs, out mapArgs, out error);
-                if (!micResult)
+                if (TryBuildDshow(systemAudio: false, microphone: true, out inputArgs, out _, out error))
                 {
-                    return false;
+                    mapArgs = "-map 0:v -map 1:a -c:a aac -b:a 192k ";
+                    return true;
                 }
 
-                mapArgs = "-filter_complex \"[1:a][2:a]amix=inputs=2:duration=longest[aout]\" -map 0:v -map \"[aout]\" -c:a aac -b:a 192k ";
-            }
-            else
-            {
-                mapArgs = "-map 0:v -map 1:a -c:a aac -b:a 192k ";
+                if (FFmpegProbe.IsWasapiSupported())
+                {
+                    inputArgs = "-thread_queue_size 512 -f wasapi -i default ";
+                    mapArgs = "-map 0:v -map 1:a -c:a aac -b:a 192k ";
+                    return true;
+                }
+
+                return false;
             }
 
             return true;
         }
 
-        return TryBuildDshow(systemAudio, microphone, out inputArgs, out mapArgs, out error);
+        if (FFmpegProbe.IsWasapiSupported())
+        {
+            BuildWasapi(systemAudio: false, microphone: true, out inputArgs, out mapArgs);
+            return true;
+        }
+
+        return TryBuildDshow(systemAudio: false, microphone: true, out inputArgs, out mapArgs, out error);
     }
 
     private static void BuildWasapi(bool systemAudio, bool microphone, out string inputArgs, out string mapArgs)
